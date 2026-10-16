@@ -77,8 +77,18 @@
     ShowConfigWindow();
 }
 
+- (void)observeForeground:(NSNotification *)notification {
+    NSRunningApplication *app = notification.userInfo[NSWorkspaceApplicationKey];
+    ObserveForeground((char *)[(app.bundleIdentifier ?: @"") UTF8String]);
+}
+
 - (void)applicationWillFinishLaunching:(NSNotification *)aNotification
 {
+    [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self
+        selector:@selector(observeForeground:)
+        name:NSWorkspaceDidActivateApplicationNotification object:nil];
+    NSRunningApplication *front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+    ObserveForeground((char *)[(front.bundleIdentifier ?: @"") UTF8String]);
     NSAppleEventManager *appleEventManager = [NSAppleEventManager sharedAppleEventManager];
     [appleEventManager setEventHandler:self
                     andSelector:@selector(handleGetURLEvent:withReplyEvent:)

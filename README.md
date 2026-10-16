@@ -1,3 +1,12 @@
+# Chrome profile handoff fork
+
+This fork avoids a reproduced four-second Chrome profile launch delay. Build and
+ad-hoc sign it on your own Mac: [local build and installation](LOCAL-INSTALL.md).
+The locally tested baseline is Finicky 4.2.2 on Apple Silicon. See
+[behavior and limitations](CHROME-HANDOFF.md) and [local timing metadata](PASSIVE-TIMING.md).
+
+The upstream README follows.
+
 <div align="center"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/ab66e6cc-25d1-4f5f-9c98-c742ecb2261f">
   <img alt="Finicky Logo" height="110" src="https://github.com/user-attachments/assets/067d7619-a2be-49dd-8a4f-5e9a46fa632a">

@@ -9,11 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"slices"
+	"strings"
 
 	"al.essio.dev/pkg/shellescape"
+	"finicky/timing"
 	"finicky/util"
+	"time"
 )
 
 //go:embed browsers.json
@@ -40,7 +42,7 @@ type browserInfo struct {
 	Type              string `json:"type"`
 }
 
-func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault bool) error {
+func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault bool, trace *timing.Trace) error {
 	if config.AppType == "none" {
 		slog.Info("AppType is 'none', not launching any browser")
 		return nil
@@ -67,8 +69,19 @@ func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault 
 	}
 
 	// Handle profile and custom args
+	profileStart := time.Now()
 	profileArgument, ok := resolveBrowserProfileArgument(config.Name, config.Profile)
+	trace.Stage("profile_lookup", profileStart, config.Profile != "" && !ok)
 	hasCustomArgs := len(config.Args) > 0
+	if ok && handoffEligible(config, profileArgument, openInBackground, dryRun) {
+		result := tryChromeHandoff(profileArgument, config.URL, trace)
+		if result.status == "acknowledged" {
+			return nil
+		}
+		if !result.mayFallback() {
+			return fmt.Errorf("Chrome handoff outcome is unknown (%s); not retried to avoid duplicate tabs", result.reason)
+		}
+	}
 
 	// Add -n flag if profile is used (required for profile switching)
 	if ok {
@@ -77,7 +90,7 @@ func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault 
 
 	// Add --args if we have profile args or custom args
 	if ok || hasCustomArgs {
-		if ! slices.Contains(config.Args, "--args") {
+		if !slices.Contains(config.Args, "--args") {
 			openArgs = append(openArgs, "--args")
 		}
 		// Add profile argument first if present
@@ -117,9 +130,14 @@ func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault 
 		return err
 	}
 
+	commandStart := time.Now()
 	if err := cmd.Start(); err != nil {
+		trace.Stage("command_start", commandStart, true)
 		return err
 	}
+
+	trace.Stage("command_start", commandStart, false)
+	waitStart := time.Now()
 
 	stderrBytes, err := io.ReadAll(stderr)
 	if err != nil {
@@ -132,6 +150,7 @@ func LaunchBrowser(config BrowserConfig, dryRun bool, openInBackgroundByDefault 
 	}
 
 	cmdErr := cmd.Wait()
+	trace.Stage("command_wait", waitStart, cmdErr != nil)
 
 	if len(stderrBytes) > 0 {
 		slog.Error("Command returned error", "error", string(stderrBytes))

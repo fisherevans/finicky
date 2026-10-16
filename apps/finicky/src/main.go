@@ -16,12 +16,14 @@ import (
 	"finicky/config"
 	"finicky/logger"
 	"finicky/shorturl"
+	"finicky/timing"
 	"finicky/version"
 	"finicky/window"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
@@ -44,6 +46,7 @@ type UpdateInfo struct {
 }
 
 type URLInfo struct {
+	Trace            *timing.Trace
 	URL              string
 	Opener           *ProcessInfo
 	OpenInBackground bool
@@ -57,6 +60,8 @@ type ConfigInfo struct {
 }
 
 // FIXME: Clean up app global stae
+var metrics *timing.Recorder
+
 var urlListener chan URLInfo = make(chan URLInfo)
 var windowClosed chan struct{} = make(chan struct{})
 var vm *config.VM
@@ -73,6 +78,10 @@ var shouldKeepRunning bool = true
 func main() {
 	startTime := time.Now()
 	logger.Setup()
+	if home, err := os.UserHomeDir(); err == nil {
+		metrics = timing.New(filepath.Join(home, "Library", "Logs", "Finicky", "timing"))
+		metrics.Record(timing.Event{Kind: "session_started"})
+	}
 	runtime.LockOSThread()
 
 	// Define command line flags
@@ -145,6 +154,9 @@ func main() {
 				startTime := time.Now()
 
 				url := urlInfo.URL
+				if urlInfo.Trace != nil {
+					urlInfo.Trace.Stage("queue_wait", urlInfo.Trace.Received, false)
+				}
 
 				slog.Info("URL received", "url", url)
 
@@ -152,7 +164,7 @@ func main() {
 				var err error
 
 				if vm != nil {
-					browserConfig, err = evaluateURL(vm.Runtime(), url, urlInfo.Opener)
+					browserConfig, err = evaluateURL(vm.Runtime(), url, urlInfo.Opener, urlInfo.Trace)
 					if err != nil {
 						handleRuntimeError(err)
 					}
@@ -171,7 +183,15 @@ func main() {
 					}
 				}
 
-				if err := browser.LaunchBrowser(*browserConfig, dryRun, urlInfo.OpenInBackground); err != nil {
+				background := urlInfo.OpenInBackground
+				if browserConfig.OpenInBackground != nil {
+					background = *browserConfig.OpenInBackground
+				}
+				urlInfo.Trace.Record(timing.Event{Kind: "dispatch_started", Host: timing.Host(browserConfig.URL), App: browserConfig.Name, Profile: browserConfig.Profile, Background: background, DryRun: dryRun})
+				dispatchStart := time.Now()
+				launchErr := browser.LaunchBrowser(*browserConfig, dryRun, urlInfo.OpenInBackground, urlInfo.Trace)
+				urlInfo.Trace.Stage("dispatch_completed", dispatchStart, launchErr != nil)
+				if err := launchErr; err != nil {
 					slog.Error("Failed to start browser", "error", err)
 				}
 
@@ -259,6 +279,7 @@ func getHideIcon() bool {
 
 //export HandleURL
 func HandleURL(url *C.char, name *C.char, bundleId *C.char, path *C.char, openInBackground C.bool) {
+	received := time.Now()
 	var opener ProcessInfo
 
 	if name != nil && bundleId != nil && path != nil {
@@ -284,13 +305,25 @@ func HandleURL(url *C.char, name *C.char, bundleId *C.char, path *C.char, openIn
 
 	urlListener <- URLInfo{
 		URL:              urlString,
+		Trace:            metrics.Begin(urlString, received, opener.BundleID),
 		Opener:           &opener,
 		OpenInBackground: bool(openInBackground),
 	}
 }
 
-func evaluateURL(vm *goja.Runtime, url string, opener *ProcessInfo) (*browser.BrowserConfig, error) {
+//export ObserveForeground
+func ObserveForeground(bundleID *C.char) {
+	metrics.Foreground(C.GoString(bundleID))
+}
+
+func evaluateURL(vm *goja.Runtime, url string, opener *ProcessInfo, trace *timing.Trace) (*browser.BrowserConfig, error) {
+	resolveStart := time.Now()
 	resolvedURL, err := shorturl.ResolveURL(url)
+	trace.Stage("resolution", resolveStart, err != nil)
+	trace.Record(timing.Event{Kind: "resolved", Host: timing.Host(resolvedURL)})
+	routeStart := time.Now()
+	var routeFailed bool
+	defer func() { trace.Stage("routing", routeStart, routeFailed) }()
 	if err != nil {
 		// Continue with original URL if resolution fails
 		slog.Info("Failed to resolve short URL", "error", err)
@@ -315,18 +348,21 @@ func evaluateURL(vm *goja.Runtime, url string, opener *ProcessInfo) (*browser.Br
 
 	openResult, err := vm.RunString("finickyConfigAPI.openUrl(url, opener, finalConfig)")
 	if err != nil {
+		routeFailed = true
 		return nil, fmt.Errorf("failed to evaluate URL in config: %v", err)
 	}
 
 	resultJSON := openResult.ToObject(vm).Export()
 	resultBytes, err := json.Marshal(resultJSON)
 	if err != nil {
+		routeFailed = true
 		return nil, fmt.Errorf("failed to process browser configuration: %v", err)
 	}
 
 	var browserResult browser.BrowserResult
 
 	if err := json.Unmarshal(resultBytes, &browserResult); err != nil {
+		routeFailed = true
 		return nil, fmt.Errorf("failed to parse browser configuration: %v", err)
 	}
 
@@ -339,6 +375,7 @@ func evaluateURL(vm *goja.Runtime, url string, opener *ProcessInfo) (*browser.Br
 	)
 	var resultErr error
 	if browserResult.Error != "" {
+		routeFailed = true
 		resultErr = fmt.Errorf("%s", browserResult.Error)
 	}
 	return &browserResult.Browser, resultErr

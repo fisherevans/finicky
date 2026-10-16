@@ -9,6 +9,7 @@
 #include <syslog.h>
 #include <stdbool.h>
 
+extern void ObserveForeground(char *bundleID);
 extern void HandleURL(char *url, char *name, char *bundleId, char *path, bool openInBackground);
 extern void QueueWindowDisplay(int launchedByUser);
 extern void ShowConfigWindow();

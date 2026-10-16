@@ -19,7 +19,11 @@
     <key>CFBundleShortVersionString</key>
     <string>4.2.2</string>
     <key>CFBundleVersion</key>
-    <string>4.2.2</string>
+    <string>4.2.2.2</string>
+    <key>FinickyInstrumentation</key>
+    <string>passive-timing-2</string>
+    <key>FinickyChromeHandoff</key>
+    <string>singleton-1</string>
     <key>CFBundleIconFile</key>
     <string>finicky.icns</string>
     <key>LSUIElement</key>
