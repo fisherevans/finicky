@@ -30,6 +30,7 @@ export GOARCH=$(go env GOHOSTARCH)
 export CGO_CFLAGS="${CGO_CFLAGS:-} -mmacosx-version-min=12.0"
 export CGO_LDFLAGS="${CGO_LDFLAGS:-} -mmacosx-version-min=12.0"
 echo 'Running tests; no browser is opened...'
+bash scripts/test-ui-bridge.sh
 npm --prefix packages/config-api test -- --run
 go test -C apps/finicky/src -mod=readonly ./...
 
