@@ -136,12 +136,12 @@ void SetFileContentWithLength(const char* path, const char* content, size_t leng
     NSString *js = [NSString stringWithFormat:@"finicky.receiveMessage(\"%@\")", escapedMessage];
 
     if ([NSThread isMainThread]) {
-        if (webView && !webView.loading) {
+        if (webView) {
             [webView evaluateJavaScript:js completionHandler:nil];
         }
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (webView && !webView.loading) {
+            if (webView) {
                 [webView evaluateJavaScript:js completionHandler:nil];
             }
         });
@@ -150,8 +150,16 @@ void SetFileContentWithLength(const char* path, const char* content, size_t leng
 
 - (void)userContentController:(WKUserContentController *)userContentController
       didReceiveScriptMessage:(WKScriptMessage *)message {
-    // Handle messages from JavaScript here
-    NSLog(@"Received message from WebView: %@", message.body);
+    if (!message.frameInfo.isMainFrame || ![message.body isKindOfClass:[NSString class]]) {
+        return;
+    }
+
+    NSData *data = [message.body dataUsingEncoding:NSUTF8StringEncoding];
+    id payload = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if ([payload isKindOfClass:[NSDictionary class]] && [payload[@"type"] isEqual:@"ready"]) {
+        // The UI has installed its receiver, so Go can now flush queued messages.
+        WindowIsReady();
+    }
 }
 
 #pragma mark - WKURLSchemeHandler
@@ -207,12 +215,6 @@ void SetFileContentWithLength(const char* path, const char* content, size_t leng
 }
 
 #pragma mark - WKNavigationDelegate
-
-- (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
-    // Notify Go that the window is ready to receive messages
-    extern void WindowIsReady(void);
-    WindowIsReady();
-}
 
 - (void)webView:(WKWebView *)webView decidePolicyForNavigationAction:(WKNavigationAction *)navigationAction decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSURL *url = navigationAction.request.URL;

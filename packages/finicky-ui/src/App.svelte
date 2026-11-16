@@ -85,7 +85,8 @@
       receiveMessage: handleMessage,
     };
 
-    // Listen for path changes
+    // Navigation can finish before Svelte mounts the message handler.
+    window.finicky.sendMessage({ type: "ready" });
   });
 </script>
 
